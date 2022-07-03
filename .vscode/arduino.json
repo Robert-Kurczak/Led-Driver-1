@@ -1,0 +1,5 @@
+{
+    "board": "arduino:avr:uno",
+    "programmer": "arduino:arduinoasispatmega32u4",
+    "sketch": "Led-Driver-1.ino"
+}
