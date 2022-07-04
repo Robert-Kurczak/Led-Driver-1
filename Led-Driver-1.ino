@@ -18,17 +18,31 @@ const char PWMsegments[6] = {blue_seg_1, blue_seg_2, blue_seg_3, blue_seg_4, yel
 
 volatile char mode = 0;
 
-void modeChange(){
-    //---Turning all segments off---
+void resetSegments(){
     for(int i = 0; i < 6; i++){
         analogWrite(PWMsegments[i], 0);
     }
-
     pinMode(green_seg_1, INPUT);
-    //------
+}
 
-    mode++;
-    mode %= 6;
+bool buttonPressed = false;
+bool modeChangeInterrupt(){
+    if(digitalRead(modeButton) && buttonPressed) buttonPressed = false;
+
+    if(!digitalRead(modeButton) && !buttonPressed){
+        mode++;
+        mode %= 7;
+
+        buttonPressed = true;
+
+        resetSegments();
+
+        delay(400);
+
+        return true;
+    }
+
+    return false;
 }
 
 float readBrightness(){
@@ -50,69 +64,94 @@ void greenSegPWMCycle(int duty){
 }
 
 //---Fade functions---
-//TODO move this directly to serial and parallel fade
-//so it can easier be broken by interrupt
-void fadeInGreenSeg(unsigned long fadeTime){
+//Returns true if the whole fade cycle was made without interrupt
+//Returns false otherwise
+bool fadeInGreenSeg(unsigned long fadeTime){
     unsigned long startTime = millis();
     
     unsigned long currentTime = 0;
 
     while(currentTime <= fadeTime){
+        if(modeChangeInterrupt()) return false;
+
         float brightness = readBrightness();
         greenSegPWMCycle(((currentTime / (float)fadeTime) * 255.f) * brightness);
 
         currentTime = millis() - startTime;
     }
+
+    return true;
 }
 
-void fadeOutGreenSeg(unsigned long fadeTime){
+bool fadeOutGreenSeg(unsigned long fadeTime){
     unsigned long startTime = millis();
     
     unsigned long currentTime = 0;
 
     while(currentTime <= fadeTime){
+        if(modeChangeInterrupt()) return false;
+
         float brightness = readBrightness();
         greenSegPWMCycle((255 - (currentTime / (float)fadeTime) * 255.f) * brightness);
 
         currentTime = millis() - startTime;
     }
+
+    return true;
 }
 
-void fadeIn(char PWM_pin, unsigned long fadeTime){
+bool fadeIn(char PWM_pin, unsigned long fadeTime){
     unsigned long startTime = millis();
     
     unsigned long currentTime = 0;
 
     while(currentTime <= fadeTime){
+        if(modeChangeInterrupt()) return false;
+
         float brightness = readBrightness();
         analogWrite(PWM_pin, ((currentTime / (float)fadeTime) * 255.f) * brightness);
 
         currentTime = millis() - startTime;
     }
+
+    return true;
 }
 
-void fadeOut(char PWM_pin, unsigned long fadeTime){
+bool fadeOut(char PWM_pin, unsigned long fadeTime){
     unsigned long startTime = millis();
     
     unsigned long currentTime = 0;
 
     while(currentTime <= fadeTime){
+        if(modeChangeInterrupt()) return false;
+
         float brightness = readBrightness();
         analogWrite(PWM_pin, (255 - (currentTime / (float)fadeTime) * 255.f) * brightness);
 
         currentTime = millis() - startTime;
     }
+
+    return true;
 }
 //---
 
+void stillDisplay(){
+    for(char i = 0; i < 6; i++){
+        if(modeChangeInterrupt()) return;
+
+        float brightness = readBrightness();
+
+        analogWrite(PWMsegments[i], 255.f * brightness);
+        greenSegPWMCycle(255.f * brightness);
+    }
+}
+
 void serialFade(unsigned long fadeTime){
     for(char i = 0; i < 6; i++){
-        fadeIn(PWMsegments[i], fadeTime);
-        fadeOut(PWMsegments[i], fadeTime);
+        if(!fadeIn(PWMsegments[i], fadeTime) || !fadeOut(PWMsegments[i], fadeTime)) return;
     }
 
-    fadeInGreenSeg(fadeTime);
-    fadeOutGreenSeg(fadeTime);
+    if(!fadeInGreenSeg(fadeTime) || !fadeOutGreenSeg(fadeTime)) return;
 }
 
 void parallelFade(unsigned long fadeTime){
@@ -122,7 +161,9 @@ void parallelFade(unsigned long fadeTime){
     //Fade in
     while(currentTime <= fadeTime / 2){
         for(char i = 0; i < 6; i++){
-            float brightness = (float)analogRead(brightnessPot) / 1024.f;
+            if(modeChangeInterrupt()) return;
+
+            float brightness = readBrightness();
             int duty = ((currentTime / (float)fadeTime) * 255.f) * brightness;
             
             analogWrite(PWMsegments[i], duty);
@@ -135,6 +176,8 @@ void parallelFade(unsigned long fadeTime){
     //Fade out
     while(currentTime <= fadeTime){
         for(char i = 0; i < 6; i++){
+            if(modeChangeInterrupt()) return;
+
             float brightness = (float)analogRead(brightnessPot) / 1024.f;
             int duty = (255 - (currentTime / (float)fadeTime) * 255.f) * brightness;
             
@@ -144,18 +187,20 @@ void parallelFade(unsigned long fadeTime){
 
         currentTime = millis() - startTime;
     }
+
+    resetSegments();
+
+    delay(500);
 }
 
 void randomFade(unsigned long fadeTime){
     char randomSeg = random(0, 7);
 
-    if(randomSeg == 7){
-        fadeInGreenSeg(fadeTime / 2);
-        fadeOutGreenSeg(fadeTime / 2);
+    if(randomSeg == 6){
+        if(!fadeInGreenSeg(fadeTime / 2) || !fadeOutGreenSeg(fadeTime / 2)) return;
     }
     else{
-        fadeIn(PWMsegments[randomSeg], fadeTime / 2);
-        fadeOut(PWMsegments[randomSeg], fadeTime / 2);
+        if(!fadeIn(PWMsegments[randomSeg], fadeTime / 2) || !fadeOut(PWMsegments[randomSeg], fadeTime / 2)) return;
     }
 }
 
@@ -164,33 +209,38 @@ void setup(){
     pinMode(green_seg_1, INPUT);
 
     pinMode(modeButton, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(mode), modeChange, FALLING);
+
+    randomSeed(analogRead(0));
 }
 
 void loop(){
     switch(mode){
         case 0:
-            serialFade(600);
+            stillDisplay();
             break;
 
         case 1:
+            serialFade(600);
+            break;
+
+        case 2:
             serialFade(300);
             break;
 
-        // case 2:
-        //     //serialFade(300);
-        //     break;
+        case 3:
+            parallelFade(2500);
+            break;
 
-        // case 3:
-        //     //parallelFade(600);
-        //     break;
+        case 4:
+            parallelFade(1250);
+            break;
 
-        // case 4:
-        //     //parallelFade(300);
-        //     break;
+        case 5:
+            randomFade(1200);
+            break;
 
-        // case 5:
-        //     // randomFade(1200);
-        //     break;
+        case 6:
+            randomFade(600);
+            break;
     }
 }
